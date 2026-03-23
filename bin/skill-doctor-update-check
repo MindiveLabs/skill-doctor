@@ -4,9 +4,10 @@
 # Always exits 0 (silent on error)
 set -uo pipefail
 
-SKILL_DIR="$HOME/.claude/skills/skill-doctor"
+# SKILL_DOCTOR_INSTALL_DIR can override the install path (used for testing)
+SKILL_DIR="${SKILL_DOCTOR_INSTALL_DIR:-${HOME}/.claude/skills/skill-doctor}"
 VERSION_FILE="$SKILL_DIR/VERSION"
-GITHUB_REPO="zandersun/skill-doctor"   # Update when repo is published
+GITHUB_REPO="MindiveLabs/skill-doctor"
 TIMEOUT=5
 
 # Read current version
