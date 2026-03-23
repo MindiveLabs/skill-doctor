@@ -20,6 +20,16 @@ cp "$SCRIPT_DIR/bin/"*     "$INSTALL_DIR/bin/"
 chmod +x "$INSTALL_DIR/bin/"*
 
 echo "skill-doctor installed at $INSTALL_DIR"
+
+# Install dev git hook (only when running from a git repo, not from the install dir)
+GIT_DIR="$SCRIPT_DIR/.git"
+HOOK_SRC="$SCRIPT_DIR/hooks/pre-push"
+HOOK_DEST="$GIT_DIR/hooks/pre-push"
+if [[ -d "$GIT_DIR" ]] && [[ -f "$HOOK_SRC" ]]; then
+  ln -sf "$HOOK_SRC" "$HOOK_DEST" 2>/dev/null && \
+    echo "Dev hook installed: pre-push VERSION check" || true
+fi
+
 echo ""
 echo "Run /skill-doctor in a Claude Code session to scan for conflicts."
 echo "On first run, skill-doctor will register hooks automatically."
