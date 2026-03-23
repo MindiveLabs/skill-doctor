@@ -147,11 +147,12 @@ skill-doctor-scan --skills-dir /path/to/skills/
 
 ```bash
 cd test
-./static.test.sh    # 23 tests for the static scanner
+./static.test.sh    # 8 tests for the static scanner
 ./hook.test.sh      # 12 tests for the hook (debounce, exit codes, advisory output)
+./upgrade.test.sh   # 26 tests for the setup and update-check scripts
 ```
 
-All 35 tests pass on bash 3.2+ (macOS default).
+All 46 tests pass on bash 3.2+ (macOS default).
 
 ---
 
