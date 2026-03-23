@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# skill-doctor-upgrade — Pull latest skill-doctor from main branch on GitHub
+set -euo pipefail
+
+GITHUB_REPO="MindiveLabs/skill-doctor"
+INSTALL_DIR="${HOME}/.claude/skills/skill-doctor"
+TIMEOUT=30
+
+echo "Upgrading skill-doctor from https://github.com/$GITHUB_REPO ..."
+
+# Download main branch as tarball
+TMPDIR_UPGRADE=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_UPGRADE"' EXIT
+
+TARBALL="$TMPDIR_UPGRADE/skill-doctor.tar.gz"
+curl -fsSL \
+  --max-time "$TIMEOUT" \
+  "https://github.com/$GITHUB_REPO/archive/refs/heads/main.tar.gz" \
+  -o "$TARBALL"
+
+tar -xzf "$TARBALL" -C "$TMPDIR_UPGRADE"
+SRC=$(find "$TMPDIR_UPGRADE" -maxdepth 1 -type d -name "skill-doctor-*" | head -1)
+
+if [[ -z "$SRC" ]]; then
+  echo "ERROR: Could not find extracted skill-doctor directory" >&2
+  exit 1
+fi
+
+# Backup current installation
+BACKUP="${HOME}/.skill-doctor/trash/skill-doctor-backup-$(date +%s)"
+mkdir -p "$(dirname "$BACKUP")"
+cp -r "$INSTALL_DIR" "$BACKUP"
+echo "Backed up current install to $BACKUP"
+
+# Install new files (preserve ~/.skill-doctor/ state, only update skill files)
+mkdir -p "$INSTALL_DIR/bin"
+cp "$SRC/SKILL.md"  "$INSTALL_DIR/SKILL.md"
+cp "$SRC/VERSION"   "$INSTALL_DIR/VERSION"
+cp "$SRC/bin/"*     "$INSTALL_DIR/bin/"
+cp "$SRC/setup"     "$INSTALL_DIR/setup" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/bin/"*
+[[ -f "$INSTALL_DIR/setup" ]] && chmod +x "$INSTALL_DIR/setup"
+
+NEW_VERSION=$(cat "$INSTALL_DIR/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+echo "skill-doctor upgraded to v$NEW_VERSION"

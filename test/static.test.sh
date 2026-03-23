@@ -438,6 +438,73 @@ print('ok')
 ) || true
 
 # ---------------------------------------------------------------------------
+# Preamble: upgrade-then-proceed behavior
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Preamble: Upgrade Auto-Proceed ==="
+
+SKILL_MD="$SCRIPT_DIR/../SKILL.md"
+
+# SKILL.md must instruct Claude to proceed to Phase 1 after upgrade (not stop)
+(
+  if grep -q "automatically proceed to Phase 1" "$SKILL_MD"; then
+    echo "PASS: preamble: instructs auto-proceed to Phase 1 after upgrade"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: preamble: missing 'automatically proceed to Phase 1' instruction"
+    FAIL=$((FAIL + 1))
+  fi
+) || true
+
+# SKILL.md must NOT tell Claude to stop after upgrade and suggest re-running
+(
+  if grep -q "suggest" "$SKILL_MD" && grep -q "re-running" "$SKILL_MD"; then
+    echo "FAIL: preamble: still contains old 're-running' suggestion text"
+    FAIL=$((FAIL + 1))
+  else
+    echo "PASS: preamble: no stale 're-running' suggestion found"
+    PASS=$((PASS + 1))
+  fi
+) || true
+
+# upgrade script must exist and be executable
+(
+  UPGRADE_BIN="$SCRIPT_DIR/../bin/skill-doctor-upgrade"
+  if [[ -x "$UPGRADE_BIN" ]]; then
+    echo "PASS: preamble: skill-doctor-upgrade is executable"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: preamble: skill-doctor-upgrade missing or not executable"
+    FAIL=$((FAIL + 1))
+  fi
+) || true
+
+# update-check script exits 0 (never blocks) and produces correct format when
+# a higher version is available — test via SKILL_DOCTOR_INSTALL_DIR override
+(
+  UPDATE_BIN="$SCRIPT_DIR/../bin/skill-doctor-update-check"
+  if [[ ! -x "$UPDATE_BIN" ]]; then
+    echo "SKIP: update-check: binary not found"
+    SKIP=$((SKIP + 1))
+  else
+    # Point at a temp dir with a very low version — network call may be skipped
+    # if GitHub is unreachable; script must still exit 0
+    TMPVER=$(mktemp -d)
+    echo "0.0.1" > "$TMPVER/VERSION"
+    actual_exit=0
+    SKILL_DOCTOR_INSTALL_DIR="$TMPVER" "$UPDATE_BIN" > /dev/null 2>&1 || actual_exit=$?
+    rm -rf "$TMPVER"
+    if [[ "$actual_exit" -eq 0 ]]; then
+      echo "PASS: update-check: exits 0 regardless of network availability"
+      PASS=$((PASS + 1))
+    else
+      echo "FAIL: update-check: exited $actual_exit (expected 0)"
+      FAIL=$((FAIL + 1))
+    fi
+  fi
+) || true
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

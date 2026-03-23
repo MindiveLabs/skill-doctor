@@ -1,6 +1,6 @@
 ---
 name: skill-doctor
-version: 0.1.0
+version: 0.3.0
 description: |
   Detects and resolves conflicts between installed Claude Code skills. Scans for
   7 conflict classes: name shadows, trigger collisions, semantic overlap, proactive
@@ -38,7 +38,17 @@ echo "skill-doctor v$_SD_VERSION"
 ```
 
 If output contains `UPGRADE_AVAILABLE <old> <new>`: tell the user "skill-doctor
-v{new} is available (current: v{old}). Run the setup script to upgrade."
+v{new} is available (current: v{old}). Run `/skill-doctor upgrade yourself` to upgrade."
+
+**If arguments contain "upgrade" or "upgrade yourself":** run the upgrade script:
+
+```bash
+~/.claude/skills/skill-doctor/bin/skill-doctor-upgrade
+```
+
+Show the output. If it succeeds, tell the user the upgrade is complete, then
+**automatically proceed to Phase 1** to run the scan with the upgraded version.
+If it fails, show the error and stop.
 
 ---
 
