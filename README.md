@@ -27,9 +27,7 @@ Name Shadow, State File Collision, and Tool Conflict are detected statically (sh
 ## Installation
 
 ```bash
-git clone git@github.com:MindiveLabs/skill-doctor.git ~/.claude/skills/skill-doctor
-cd ~/.claude/skills/skill-doctor
-./setup
+git clone git@github.com:MindiveLabs/skill-doctor.git ~/.claude/skills/skill-doctor && cd ~/.claude/skills/skill-doctor && ./setup
 ```
 
 **Requirements:** bash 3.2+ (macOS default), python3
@@ -71,9 +69,10 @@ Each scan saves a full markdown report to `~/.skill-doctor/reports/` and prints 
     │
     ├── Phase 3: Metadata Cache + Semantic Analysis
     │     Reads ~/.skill-doctor/metadata-cache.json
-    │     Regenerates metadata for any new or modified skill (by mtime)
+    │     Per-skill: mtime check (fast) → SHA-256 checksum (on mtime miss)
+    │     Regenerates only when checksum differs (content truly changed)
     │     Each entry: rich summary (max 300 chars), trigger phrases,
-    │     proactive clauses, tools list
+    │     proactive clauses, tools list, mtime, checksum
     │     Detects: Trigger Collision, Semantic Overlap, Proactive Race, Subsumption
     │
     ├── Phase 4: Report
@@ -99,8 +98,9 @@ All runtime state lives in `~/.skill-doctor/`:
 
 ```
 ~/.skill-doctor/
-├── metadata-cache.json    # Skill metadata keyed by path + mtime
-│                          # (name, version, summary, triggers, proactive, tools)
+├── metadata-cache.json    # Skill metadata keyed by path
+│                          # (name, version, mtime, checksum, summary, triggers, proactive, tools)
+│                          # checksum = SHA-256 of SKILL.md; guards against mtime resets
 ├── known-conflicts.json   # User-acknowledged conflict suppressions
 ├── removals.jsonl         # Log of skills moved to trash
 ├── hook.lock              # Debounce lockfile (30s window)

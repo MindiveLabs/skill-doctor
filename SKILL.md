@@ -126,17 +126,34 @@ fi
 cat "$CACHE_FILE"
 ```
 
-For each skill in the inventory:
-1. Get the file's mtime: `stat -c %Y FILE 2>/dev/null || stat -f %m FILE`
-2. Check if `path` + `mtime` matches the cache entry
-3. For uncached or stale skills (mtime changed = skill was added or modified):
-   - Read the full SKILL.md frontmatter
-   - Extract: trigger phrases ("Use when asked to...", "Use when..."),
-     proactive clauses ("Proactively suggest when..."), and allowed-tools list
-   - Generate a rich summary: 1–3 sentences describing what the skill does,
-     what it doesn't do, and when to invoke it (max 300 characters)
-   - Write the updated entry to the cache
-4. Write updated cache back to disk
+For each skill in the inventory, use a two-stage cache check:
+
+**Stage 1 — mtime (fast path):**
+```bash
+# Get current mtime
+mtime=$(stat -c %Y "$skill_file" 2>/dev/null || stat -f %m "$skill_file" 2>/dev/null || echo "0")
+```
+If the cache entry exists and `mtime` matches → skip this skill entirely. Content
+hasn't changed; no checksum or regeneration needed.
+
+**Stage 2 — checksum (mtime changed or no cache entry):**
+```bash
+# Compute SHA-256 of the file content (macOS and Linux compatible)
+checksum=$(shasum -a 256 "$skill_file" 2>/dev/null | awk '{print $1}' || \
+           sha256sum "$skill_file" 2>/dev/null | awk '{print $1}' || echo "")
+```
+Compare `checksum` to the cached value:
+- **Matches** → file was touched (git checkout, rsync, etc.) but content is unchanged.
+  Update only the `mtime` field in the cache entry. Skip regeneration.
+- **Differs or missing** → content genuinely changed. Regenerate metadata:
+  - Read the full SKILL.md frontmatter
+  - Extract: trigger phrases ("Use when asked to...", "Use when..."),
+    proactive clauses ("Proactively suggest when..."), and allowed-tools list
+  - Generate a rich summary: 1–3 sentences describing what the skill does,
+    what it doesn't do, and when to invoke it (max 300 characters)
+  - Write the full updated entry (including new `mtime` and `checksum`) to the cache
+
+Write updated cache back to disk after processing all skills.
 
 Cache entry format:
 ```json
@@ -147,6 +164,7 @@ Cache entry format:
       "name": "skill-name",
       "version": "1.0.0",
       "mtime": 1700000000,
+      "checksum": "a3f1c2d4e5b6...",
       "summary": "Up to 300-char rich description of what this skill does, when to use it, and what it does not do.",
       "triggers": ["review my code", "code review"],
       "proactive": ["when tests fail", "when the user reports an error"],
@@ -156,8 +174,9 @@ Cache entry format:
 }
 ```
 
-The cache is updated whenever a skill's SKILL.md changes (detected by mtime). This
-ensures metadata stays current without re-reading every skill on every invocation.
+`checksum` is a SHA-256 hex digest of the SKILL.md file contents. It is the
+authoritative signal for whether metadata needs regeneration. `mtime` is a
+cheap pre-check that avoids computing checksums on every invocation.
 
 ### Step 2: Semantic Conflict Detection
 
