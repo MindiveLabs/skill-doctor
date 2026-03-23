@@ -7,7 +7,7 @@ set -o pipefail
 SKILL_DIR="$HOME/.claude/skills/skill-doctor"
 # Fallback: find scanner relative to this script (useful when running from source)
 _SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || _SCRIPT_DIR=""
-STATE_DIR="$HOME/.config/skill-doctor"
+STATE_DIR="$HOME/.skill-doctor"
 LOCKFILE="$STATE_DIR/hook.lock"
 DEBOUNCE_SECS=30
 SESSION_START=0

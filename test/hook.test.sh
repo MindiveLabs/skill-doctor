@@ -15,8 +15,8 @@ if [[ ! -x "$HOOK" ]]; then
   exit 1
 fi
 
-LOCK_FILE="${HOME}/.config/skill-doctor/hook.lock"
-SCAN_MTIME_FILE="${HOME}/.config/skill-doctor/scan-mtime.txt"
+LOCK_FILE="${HOME}/.skill-doctor/hook.lock"
+SCAN_MTIME_FILE="${HOME}/.skill-doctor/scan-mtime.txt"
 
 cleanup() {
   rm -f "$LOCK_FILE" "$SCAN_MTIME_FILE"

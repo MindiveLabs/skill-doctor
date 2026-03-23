@@ -13,13 +13,15 @@ allowed-tools:
   - Bash
   - Read
   - Write
-  - Edit
   - AskUserQuestion
 ---
 
 # skill-doctor
 
 Detects and resolves conflicts between installed Claude Code skills.
+
+**Read-only by default.** skill-doctor never modifies skill files unless the user
+explicitly asks. All analysis is non-destructive. Removals move to trash (recoverable).
 
 ---
 
@@ -30,14 +32,13 @@ Run this first:
 ```bash
 _UPD=$(~/.claude/skills/skill-doctor/bin/skill-doctor-update-check 2>/dev/null || true)
 [ -n "$_UPD" ] && echo "$_UPD" || true
-mkdir -p ~/.config/skill-doctor/trash
+mkdir -p ~/.skill-doctor/trash ~/.skill-doctor/reports
 _SD_VERSION=$(cat ~/.claude/skills/skill-doctor/VERSION 2>/dev/null || echo "0.1.0")
 echo "skill-doctor v$_SD_VERSION"
 ```
 
 If output contains `UPGRADE_AVAILABLE <old> <new>`: tell the user "skill-doctor
-v{new} is available (current: v{old}). Run `~/.claude/skills/skill-doctor/setup`
-to upgrade."
+v{new} is available (current: v{old}). Run the setup script to upgrade."
 
 ---
 
@@ -104,20 +105,20 @@ SCAN_EXIT=$?
 cat /tmp/sd-static.err >&2 || true
 ```
 
-Read `/tmp/sd-static.json`. It contains conflicts for Classes 1 (Name Shadow),
-5 (State File Collision), and 6 (Tool Permission Conflict).
+Read `/tmp/sd-static.json`. It contains conflicts for Name Shadow, State File Collision,
+and Tool Permission Conflict.
 
 If scan fails or produces invalid JSON, warn: "Static scan failed — skipping
-Classes 1/5/6. Proceeding with semantic analysis only."
+static checks. Proceeding with semantic analysis only."
 
 ---
 
-## Phase 3: Semantic Analysis (Classes 2, 3, 4, 7)
+## Phase 3: Metadata Cache + Semantic Analysis
 
 ### Step 1: Read/Update Metadata Cache
 
 ```bash
-CACHE_FILE="${HOME}/.config/skill-doctor/metadata-cache.json"
+CACHE_FILE="${HOME}/.skill-doctor/metadata-cache.json"
 mkdir -p "$(dirname "$CACHE_FILE")"
 if [[ ! -f "$CACHE_FILE" ]]; then
   echo '{"schema_version":1,"skills":{}}' > "$CACHE_FILE"
@@ -125,12 +126,34 @@ fi
 cat "$CACHE_FILE"
 ```
 
-For each skill in the inventory:
-1. Get the file's mtime: `stat -c %Y FILE 2>/dev/null || stat -f %m FILE`
-2. Check if `path` + `mtime` matches the cache
-3. For uncached or stale skills: generate a 1-line summary by reasoning about
-   the skill's description (what does it do, in 8-15 words)
-4. Write updated cache back
+For each skill in the inventory, use a two-stage cache check:
+
+**Stage 1 — mtime (fast path):**
+```bash
+# Get current mtime
+mtime=$(stat -c %Y "$skill_file" 2>/dev/null || stat -f %m "$skill_file" 2>/dev/null || echo "0")
+```
+If the cache entry exists and `mtime` matches → skip this skill entirely. Content
+hasn't changed; no checksum or regeneration needed.
+
+**Stage 2 — checksum (mtime changed or no cache entry):**
+```bash
+# Compute SHA-256 of the file content (macOS and Linux compatible)
+checksum=$(shasum -a 256 "$skill_file" 2>/dev/null | awk '{print $1}' || \
+           sha256sum "$skill_file" 2>/dev/null | awk '{print $1}' || echo "")
+```
+Compare `checksum` to the cached value:
+- **Matches** → file was touched (git checkout, rsync, etc.) but content is unchanged.
+  Update only the `mtime` field in the cache entry. Skip regeneration.
+- **Differs or missing** → content genuinely changed. Regenerate metadata:
+  - Read the full SKILL.md frontmatter
+  - Extract: trigger phrases ("Use when asked to...", "Use when..."),
+    proactive clauses ("Proactively suggest when..."), and allowed-tools list
+  - Generate a rich summary: 1–3 sentences describing what the skill does,
+    what it doesn't do, and when to invoke it (max 300 characters)
+  - Write the full updated entry (including new `mtime` and `checksum`) to the cache
+
+Write updated cache back to disk after processing all skills.
 
 Cache entry format:
 ```json
@@ -139,12 +162,21 @@ Cache entry format:
   "skills": {
     "/path/to/SKILL.md": {
       "name": "skill-name",
+      "version": "1.0.0",
       "mtime": 1700000000,
-      "summary": "8-15 word summary of what this skill does"
+      "checksum": "a3f1c2d4e5b6...",
+      "summary": "Up to 300-char rich description of what this skill does, when to use it, and what it does not do.",
+      "triggers": ["review my code", "code review"],
+      "proactive": ["when tests fail", "when the user reports an error"],
+      "tools": ["Bash", "Read"]
     }
   }
 }
 ```
+
+`checksum` is a SHA-256 hex digest of the SKILL.md file contents. It is the
+authoritative signal for whether metadata needs regeneration. `mtime` is a
+cheap pre-check that avoids computing checksums on every invocation.
 
 ### Step 2: Semantic Conflict Detection
 
@@ -152,24 +184,24 @@ Cache entry format:
 
 **If ≤80 skills (single-pass):**
 
-Reason about all skills simultaneously. For each pair that may conflict, identify:
+Reason about all skills simultaneously using the cached summaries and trigger phrases.
+For each pair that may conflict, identify:
 
-- **Class 2 (Trigger Collision)**: Overlapping "Use when asked to" or "Use when" phrases.
-  Two skills have trigger phrases that would match the same user request. This means
-  Claude would arbitrarily choose one or both, leading to confusing behavior.
+- **Trigger Collision**: Overlapping "Use when asked to" or "Use when" phrases.
+  Two skills have trigger phrases that would match the same user request. Claude would
+  arbitrarily choose one or both, leading to confusing behavior.
   Example: skill-a triggers on "review my code" and skill-b also triggers on "review code".
 
-- **Class 3 (Semantic Overlap)**: Same user intent, different descriptions. A user asking
+- **Semantic Overlap**: Same user intent, different descriptions. A user asking
   for help with the underlying task might invoke either skill. The skills don't share
   trigger phrases but solve the same problem.
   Example: "debug-helper" (root cause analysis) and "bug-fixer" (find and fix bugs).
 
-- **Class 4 (Proactive Suggestion Race)**: Both skills have "Proactively suggest when"
-  clauses that would fire simultaneously for the same user situation. This creates
-  a "two doctors both giving advice" problem.
+- **Proactive Suggestion Race**: Both skills have "Proactively suggest when"
+  clauses that would fire simultaneously for the same user situation.
   Example: skill-a suggests when "tests fail" and skill-b suggests when "user sees an error".
 
-- **Class 7 (Subsumption)**: One skill fully covers the other. Installing both is
+- **Subsumption**: One skill fully covers the other. Installing both is
   redundant — the subsumed skill is never the better choice.
   Example: "code-assistant" covers everything "snippet-writer" does plus more.
 
@@ -177,7 +209,7 @@ Report conflicts as JSON:
 ```json
 [
   {
-    "class": "2",
+    "type": "trigger-collision",
     "skill_a": "pr-review",
     "skill_b": "code-review",
     "severity": "HIGH",
@@ -189,11 +221,11 @@ Report conflicts as JSON:
 
 **If >80 skills (two-pass):**
 
-*Pass 1:* Use the 1-line summaries (8-15 words each) to group semantically similar
-skills. Skills in different groups cannot conflict. Identify groups with ≥2 skills.
+*Pass 1:* Use the cached summaries to group semantically similar skills.
+Skills in different groups cannot conflict. Identify groups with ≥2 skills.
 
-*Pass 2:* For each group with ≥2 skills, analyze the full descriptions to detect
-conflict classes 2, 3, 4, 7 as above.
+*Pass 2:* For each group with ≥2 skills, analyze using full cached metadata to detect
+all four semantic conflict types above.
 
 *Merge:* Combine results from all groups. Deduplicate.
 
@@ -206,39 +238,59 @@ with Phase 4 using only static results.
 ## Phase 4: Report
 
 Merge static conflicts (from `/tmp/sd-static.json`) and semantic conflicts
-(from Phase 3). Remove any conflicts listed in `~/.config/skill-doctor/known-conflicts.json`
+(from Phase 3). Remove any conflicts listed in `~/.skill-doctor/known-conflicts.json`
 (user-acknowledged suppressions). GC stale entries from known-conflicts.json
 (skills that no longer exist).
 
-Display the conflict map:
+Display the conflict map using human-readable names only (no internal class numbers):
 
 ```
 skill-doctor scan complete — X skills, Y conflicts found
 ═══════════════════════════════════════════════════════
 
-CRITICAL (must resolve before skills work correctly):
+Must resolve (skills may not work correctly):
   [1] pr-review ←→ code-review
-      Class 1: Name Shadow — both named "my-skill"
-      pr-review shadows code-review (personal > project scope)
+      Name Shadow — both skills have the same name
+      pr-review takes precedence (personal scope > project scope)
+      → Remove code-review to fix
 
-HIGH:
+High priority:
   [2] pr-review ←→ code-review
-      Class 2: Trigger Collision — both trigger on "code review"
-      Recommendation: keep pr-review, remove code-review
+      Trigger Collision — both trigger on "code review"
+      → Recommendation: keep pr-review, remove code-review
 
-MEDIUM:
+Medium priority:
   [3] hook-manager ←→ hook-cleaner
-      Class 5: State Collision — both write ~/.claude/settings.json
+      State File Collision — both read/write ~/.claude/settings.json
 
-LOW:
+Low priority:
   [4] read-only-assistant ←→ safe-viewer
-      Class 6: Tool Conflict — both have disable-model-invocation: true
+      Tool Conflict — both restrict model invocation
 
 ───────────────────────────────────────────────────────
 Run `/skill-doctor --fix` to interactively resolve these.
 ```
 
 If no conflicts: "No conflicts found across X skills. ✓"
+
+### Save Report
+
+Save the full report to disk and show the path:
+
+```bash
+REPORT_USER=$(whoami)
+REPORT_TS=$(date +%Y%m%d-%H%M%S)
+REPORT_FILE="${HOME}/.skill-doctor/reports/${REPORT_USER}-${REPORT_TS}-scan.md"
+mkdir -p "${HOME}/.skill-doctor/reports"
+```
+
+Write a markdown report to `$REPORT_FILE` containing:
+- Timestamp and skill-doctor version
+- Skill inventory (names, paths, scopes)
+- Full conflict list with reasons and recommendations
+- Any warnings (skipped/malformed skills)
+
+Tell the user: "Report saved to `$REPORT_FILE`"
 
 If `--fix` was NOT passed in the invocation: stop here and suggest
 `/skill-doctor --fix`.
@@ -249,64 +301,69 @@ If `--fix` was NOT passed in the invocation: stop here and suggest
 
 (Only runs when invoked as `/skill-doctor --fix` or user says "fix", "resolve", etc.)
 
-For each conflict (in severity order: CRITICAL first), use AskUserQuestion:
+**skill-doctor is read-only.** It analyzes and reports. The only actions here are:
+- Moving a skill directory to trash (reversible)
+- Suppressing a known-intentional conflict
+- Optionally editing a skill's description (only when user explicitly requests it)
+
+For each conflict (in severity order: critical first), use AskUserQuestion:
 
 Present:
-- Conflict number and class name
-- skill_a and skill_b: names and file paths
-- The reason (why this is a conflict)
+- The two skill names and their file paths
+- The conflict type (human-readable name)
+- The reason this is a conflict
 - The recommendation (which to keep)
 
 Options:
 ```
-A) Keep [skill_a], remove [skill_b]  — [recommendation if applicable]
-B) Keep [skill_b], remove [skill_a]  — [recommendation if applicable]
+A) Keep [skill_a], remove [skill_b]  — moves skill_b to trash (recoverable)
+B) Keep [skill_b], remove [skill_a]  — moves skill_a to trash (recoverable)
 C) Mark as intentional (suppress future warnings)
-D) Edit skill content to resolve (I'll propose minimal description changes)
+D) Edit a skill's description to resolve (I'll propose the minimal change for approval)
 E) Skip for now
 ```
-
-**Important:** Do NOT suggest modifying skill content unless the user explicitly
-chooses option D. The default recommendation is always keep/remove.
 
 **If A or B chosen:**
 1. Move the removed skill's directory to trash:
    ```bash
    SKILL_DIR=$(dirname PATH_TO_SKILL_MD)
    SKILL_NAME=$(basename "$SKILL_DIR")
-   TRASH_DEST="${HOME}/.config/skill-doctor/trash/${SKILL_NAME}-$(date +%s)"
+   TRASH_DEST="${HOME}/.skill-doctor/trash/${SKILL_NAME}-$(date +%s)"
    mv "$SKILL_DIR" "$TRASH_DEST"
    ```
 2. Log to removals.jsonl:
    ```bash
-   echo '{"schema_version":1,"name":"SKILL_NAME","path":"ORIGINAL_PATH","trashed_at":"TIMESTAMP","conflict_class":"CLASS"}' \
-     >> ~/.config/skill-doctor/removals.jsonl
+   echo '{"schema_version":1,"name":"SKILL_NAME","path":"ORIGINAL_PATH","trashed_at":"TIMESTAMP","conflict_type":"TYPE"}' \
+     >> ~/.skill-doctor/removals.jsonl
    ```
-3. Confirm: "Moved [skill_name] to trash at $TRASH_DEST. Restore with: mv '$TRASH_DEST' 'ORIGINAL_PARENT/'"
+3. Confirm: "Moved [skill_name] to trash at $TRASH_DEST. Restore anytime with:
+   `mv '$TRASH_DEST' 'ORIGINAL_PARENT/'`"
 
 **If C chosen:**
 Append to known-conflicts.json:
 ```bash
 python3 -c "
 import json, sys, os
-f = os.path.expanduser('~/.config/skill-doctor/known-conflicts.json')
+f = os.path.expanduser('~/.skill-doctor/known-conflicts.json')
 try:
     with open(f) as fh: d = json.load(fh)
 except: d = {'schema_version': 1, 'conflicts': []}
 d.setdefault('conflicts', []).append({
     'skill_a': 'SKILL_A', 'skill_b': 'SKILL_B',
-    'class': 'CLASS', 'ts': 'TIMESTAMP'
+    'type': 'TYPE', 'ts': 'TIMESTAMP'
 })
 with open(f, 'w') as fh: json.dump(d, fh, indent=2)
 "
 ```
 
-**If D chosen:**
+**If D chosen (explicit user request only):**
 Propose a minimal edit to one skill's description that eliminates the conflict
-(e.g., narrow a trigger phrase, clarify scope). Show the diff. Ask for approval
-before touching the file.
+(e.g., narrow a trigger phrase, clarify scope). Show the exact diff. Ask for
+explicit approval before touching any file. Never modify skill files without this
+two-step confirmation.
 
 **After all conflicts resolved:** Re-run Phases 2+3 to confirm clean state.
+Save a new report and show the path.
 
 ---
 
