@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# skill-doctor-update-check — Check if a newer version is available on GitHub
+# Output: "UPGRADE_AVAILABLE <current> <latest>" or nothing
+# Always exits 0 (silent on error)
+set -uo pipefail
+
+SKILL_DIR="$HOME/.claude/skills/skill-doctor"
+VERSION_FILE="$SKILL_DIR/VERSION"
+GITHUB_REPO="zandersun/skill-doctor"   # Update when repo is published
+TIMEOUT=5
+
+# Read current version
+CURRENT=$(cat "$VERSION_FILE" 2>/dev/null | tr -d '[:space:]' || echo "")
+[[ -z "$CURRENT" ]] && exit 0
+
+# Fetch latest release tag from GitHub
+LATEST=$(curl -sf \
+  --max-time "$TIMEOUT" \
+  --header "Accept: application/vnd.github.v3+json" \
+  "https://api.github.com/repos/$GITHUB_REPO/releases/latest" 2>/dev/null | \
+  grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | \
+  sed 's/.*:[[:space:]]*"//;s/"$//' | \
+  sed 's/^v//' | tr -d '[:space:]' || true)
+
+[[ -z "$LATEST" ]] && exit 0
+
+# Simple semver compare: split by '.' and compare numerically
+version_gt() {
+  local a="$1" b="$2"
+  IFS='.' read -ra A <<< "$a"
+  IFS='.' read -ra B <<< "$b"
+  for i in 0 1 2; do
+    local ai="${A[$i]:-0}" bi="${B[$i]:-0}"
+    (( ai > bi )) && return 0
+    (( ai < bi )) && return 1
+  done
+  return 1  # equal
+}
+
+if version_gt "$LATEST" "$CURRENT"; then
+  echo "UPGRADE_AVAILABLE $CURRENT $LATEST"
+fi
+
+exit 0

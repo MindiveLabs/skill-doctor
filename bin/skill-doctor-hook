@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# skill-doctor-hook — Hook entry point for ConfigChange[skills] and SessionStart hooks
+# Called by Claude Code when a skill file changes or session starts.
+# Always exits 0 (advisory, never blocking).
+set -o pipefail
+
+SKILL_DIR="$HOME/.claude/skills/skill-doctor"
+# Fallback: find scanner relative to this script (useful when running from source)
+_SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || _SCRIPT_DIR=""
+STATE_DIR="$HOME/.config/skill-doctor"
+LOCKFILE="$STATE_DIR/hook.lock"
+DEBOUNCE_SECS=30
+SESSION_START=0
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --session-start) SESSION_START=1; shift ;;
+    *) shift ;;
+  esac
+done
+
+# Ensure state dir exists
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# ── Debounce ──────────────────────────────────────────────────────────────────
+# Prevent rapid-fire hook runs (e.g., bulk skill install writing many SKILL.md files)
+
+now=$(date +%s)
+
+if [[ -f "$LOCKFILE" ]]; then
+  lock_ts=$(cat "$LOCKFILE" 2>/dev/null | grep -oE '^[0-9]+' || echo "0")
+  age=$(( now - lock_ts ))
+  if (( age < DEBOUNCE_SECS )); then
+    # Within debounce window — skip silently
+    exit 0
+  fi
+fi
+
+# Write lockfile (timestamp on first line)
+echo "$now" > "$LOCKFILE" 2>/dev/null || true
+trap 'rm -f "$LOCKFILE" 2>/dev/null || true' EXIT
+
+# ── Read stdin payload (ConfigChange event) ───────────────────────────────────
+
+if [[ $SESSION_START -eq 0 ]]; then
+  INPUT=$(cat 2>/dev/null || true)
+
+  # Extract file_path from JSON payload (grep/sed, fallback to python3)
+  FILE_PATH=$(printf '%s' "$INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*:[[:space:]]*"//;s/"$//' || true)
+  if [[ -z "$FILE_PATH" ]]; then
+    FILE_PATH=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; print(json.loads(sys.stdin.read()).get("file_path",""))' 2>/dev/null || true)
+  fi
+
+  # If file_path doesn't look like a SKILL.md, skip (false positive guard)
+  if [[ -n "$FILE_PATH" ]] && ! printf '%s' "$FILE_PATH" | grep -q 'SKILL\.md$' 2>/dev/null; then
+    exit 0
+  fi
+fi
+
+# ── Mtime cache check (for SessionStart mode) ─────────────────────────────────
+
+if [[ $SESSION_START -eq 1 ]]; then
+  MTIME_CACHE="$STATE_DIR/scan-mtime.txt"
+  LAST_SCAN_MTIME=$(cat "$MTIME_CACHE" 2>/dev/null || echo "0")
+
+  # Get newest mtime across skill directories
+  NEWEST_MTIME=0
+  for skills_dir in "$HOME/.claude/skills" "$(pwd)/.claude/skills"; do
+    [[ -d "$skills_dir" ]] || continue
+    dir_mtime=$(find "$skills_dir" -name "SKILL.md" -newer "$MTIME_CACHE" 2>/dev/null | head -1 || true)
+    [[ -n "$dir_mtime" ]] && NEWEST_MTIME=1 && break
+  done
+
+  if [[ $NEWEST_MTIME -eq 0 ]] && [[ -f "$MTIME_CACHE" ]]; then
+    # No changes since last scan — skip
+    exit 0
+  fi
+
+  # Update mtime cache
+  date +%s > "$MTIME_CACHE" 2>/dev/null || true
+fi
+
+# ── Run static scan ───────────────────────────────────────────────────────────
+
+SCAN_BIN="$SKILL_DIR/bin/skill-doctor-scan"
+# If installed path not found, try sibling directory (running from source)
+if [[ ! -x "$SCAN_BIN" ]] && [[ -n "$_SCRIPT_DIR" ]] && [[ -x "$_SCRIPT_DIR/skill-doctor-scan" ]]; then
+  SCAN_BIN="$_SCRIPT_DIR/skill-doctor-scan"
+fi
+
+if [[ ! -x "$SCAN_BIN" ]]; then
+  # Can't find scanner — exit silently
+  exit 0
+fi
+
+# Run scanner; capture output and exit code
+# SD_SKILLS_DIR can override the scan directory (used for testing)
+SCAN_EXIT=0
+if [[ -n "${SD_SKILLS_DIR:-}" ]]; then
+  SCAN_OUTPUT=$("$SCAN_BIN" --scope all --skills-dir "$SD_SKILLS_DIR" 2>/dev/null) || SCAN_EXIT=$?
+else
+  SCAN_OUTPUT=$("$SCAN_BIN" --scope all 2>/dev/null) || SCAN_EXIT=$?
+fi
+
+# ── Parse and print advisory ──────────────────────────────────────────────────
+
+if [[ $SCAN_EXIT -ne 0 ]] || printf '%s' "$SCAN_OUTPUT" | python3 -c '
+import sys, json
+try:
+    data = json.loads(sys.stdin.read())
+    conflicts = data.get("conflicts", [])
+    critical_high = [c for c in conflicts if c.get("severity") in ("CRITICAL", "HIGH")]
+    sys.exit(0 if critical_high else 1)
+except:
+    sys.exit(1)
+' 2>/dev/null; then
+
+  # Count conflicts by severity
+  SUMMARY=$(printf '%s' "$SCAN_OUTPUT" | python3 -c '
+import sys, json
+try:
+    data = json.loads(sys.stdin.read())
+    conflicts = data.get("conflicts", [])
+    by_sev = {}
+    for c in conflicts:
+        s = c.get("severity","UNKNOWN")
+        by_sev[s] = by_sev.get(s,0) + 1
+    parts = []
+    for s in ["CRITICAL","HIGH","MEDIUM","LOW"]:
+        if s in by_sev:
+            parts.append(f"{by_sev[s]} {s}")
+    print(", ".join(parts) if parts else "conflicts detected")
+except:
+    print("conflicts detected")
+' 2>/dev/null || echo "conflicts detected")
+
+  echo ""
+  echo "⚠️  skill-doctor: Skill conflicts detected ($SUMMARY)"
+  echo "   Run /skill-doctor to see details and resolve."
+  echo ""
+fi
+
+# Always exit 0 — hook is advisory, never blocking
+exit 0

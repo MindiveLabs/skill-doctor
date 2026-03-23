@@ -1,0 +1,361 @@
+#!/usr/bin/env bash
+# skill-doctor-scan — Static conflict scanner for Claude Code skills
+# Detects: Class 1 (Name Shadow), Class 5 (State File Collision), Class 6 (Tool Conflict)
+# Output: JSON to stdout
+# Exit: 0 = no CRITICAL conflicts; 1 = CRITICAL conflicts found
+# Requires: bash 3.2+ (macOS default), python3 or sed for JSON encoding
+set -o pipefail
+
+# ── Args ──────────────────────────────────────────────────────────────────────
+
+SCOPE="all"
+SKILLS_DIR_OVERRIDE=""
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --scope) SCOPE="$2"; shift 2 ;;
+    --skills-dir) SKILLS_DIR_OVERRIDE="$2"; shift 2 ;;
+    *) echo "Unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [[ "$SCOPE" != "all" && "$SCOPE" != "local" && "$SCOPE" != "global" ]]; then
+  echo "Invalid scope '$SCOPE'. Use: all, local, global" >&2; exit 2
+fi
+
+# ── JSON helpers (defined early — used in parse_skill) ────────────────────────
+
+json_str() {
+  # Safely JSON-encode a string
+  printf '%s' "$1" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' 2>/dev/null || \
+    printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+json_arr_str() {
+  # Convert comma-separated string to JSON array of strings
+  local csv="$1"
+  [[ -z "$csv" ]] && echo "[]" && return
+  local result="["
+  local first=1
+  local item
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    [[ $first -eq 0 ]] && result+=","
+    result+=$(json_str "$item")
+    first=0
+  done <<< "$(printf '%s' "$csv" | tr ',' '\n')"
+  result+="]"
+  echo "$result"
+}
+
+# ── Scope precedence ──────────────────────────────────────────────────────────
+
+scope_priority() {
+  case "$1" in
+    enterprise) echo 4 ;;
+    personal)   echo 3 ;;
+    project)    echo 2 ;;
+    settings)   echo 1 ;;
+    test)       echo 1 ;;
+    plugin)     echo 0 ;;
+    *)          echo 1 ;;
+  esac
+}
+
+# ── Discovery ─────────────────────────────────────────────────────────────────
+
+SCAN_ENTRIES=()  # "path:scope_label" (bash 3.2 compatible plain array)
+
+# --skills-dir overrides normal discovery (used for testing)
+if [[ -n "$SKILLS_DIR_OVERRIDE" ]]; then
+  if [[ ! -d "$SKILLS_DIR_OVERRIDE" ]]; then
+    # Non-existent override dir: emit empty results (graceful)
+    printf '{"schema_version":1,"conflicts":[],"skills":[],"warnings":["skills-dir not found: %s"]}\n' "$SKILLS_DIR_OVERRIDE"
+    exit 0
+  fi
+  SCAN_ENTRIES+=("$SKILLS_DIR_OVERRIDE:test")
+else
+  if [[ "$SCOPE" != "global" ]]; then
+    LOCAL="$(pwd)/.claude/skills"
+    [[ -d "$LOCAL" ]] && SCAN_ENTRIES+=("$LOCAL:project")
+  fi
+
+  if [[ "$SCOPE" != "local" ]]; then
+    GLOBAL="$HOME/.claude/skills"
+    [[ -d "$GLOBAL" ]] && SCAN_ENTRIES+=("$GLOBAL:personal")
+  fi
+
+  # Additional paths from settings.json
+  SETTINGS="$HOME/.claude/settings.json"
+  if [[ -f "$SETTINGS" ]] && command -v python3 &>/dev/null; then
+    while IFS= read -r extra_path; do
+      [[ -n "$extra_path" && -d "$extra_path" ]] && SCAN_ENTRIES+=("$extra_path:settings")
+    done < <(python3 -c "
+import json,sys
+try:
+  d=json.load(open('$SETTINGS'))
+  paths=d.get('skillPaths',[]) or d.get('skills',{}).get('additionalDirectories',[]) or []
+  [print(p) for p in paths if p]
+except: pass
+" 2>/dev/null || true)
+  fi
+fi
+
+# ── Skill inventory ───────────────────────────────────────────────────────────
+
+SK_NAME=()
+SK_PATH=()
+SK_SCOPE=()
+SK_TOOLS=()
+SK_WRITE_PATHS=()
+SK_DIM_TRUE=()   # disable-model-invocation: true
+SKIPPED=()
+
+# NAME_SEEN: newline-separated "name:index" strings (bash 3.2 substitute for assoc array)
+NAME_SEEN=""
+
+name_seen_get() {
+  # Returns the index for a name, or "" if not seen
+  local target="$1"
+  echo "$NAME_SEEN" | grep -E "^$(printf '%s' "$target" | sed 's/[.[\*^$]/\\&/g'):" | head -1 | cut -d: -f2
+}
+
+name_seen_set() {
+  local target="$1"
+  local idx="$2"
+  NAME_SEEN="${NAME_SEEN}
+${target}:${idx}"
+}
+
+parse_skill() {
+  local skill_file="$1"
+  local scope_label="$2"
+
+  # Resolve symlinks (guard against loops)
+  local real_path
+  real_path=$(realpath -q "$skill_file" 2>/dev/null || readlink -f "$skill_file" 2>/dev/null || echo "$skill_file")
+
+  # Readable?
+  if [[ ! -r "$real_path" ]]; then
+    SKIPPED+=("{\"path\":$(json_str "$skill_file"),\"reason\":\"permission denied\"}")
+    return
+  fi
+
+  # Has YAML frontmatter?
+  local first_line
+  first_line=$(head -1 "$real_path" 2>/dev/null || true)
+  if [[ "$first_line" != "---" ]]; then
+    SKIPPED+=("{\"path\":$(json_str "$skill_file"),\"reason\":\"no YAML frontmatter\"}")
+    return
+  fi
+
+  # Extract frontmatter block (between first and second ---)
+  local fm
+  fm=$(awk 'BEGIN{f=0} /^---$/{f++; if(f==2){exit}; next} f==1{print}' "$real_path" 2>/dev/null || true)
+
+  if [[ -z "$fm" ]]; then
+    SKIPPED+=("{\"path\":$(json_str "$skill_file"),\"reason\":\"empty frontmatter\"}")
+    return
+  fi
+
+  # Extract name:
+  local name
+  name=$(printf '%s' "$fm" | grep -E '^name:' | head -1 | sed 's/^name:[[:space:]]*//' | tr -d '"'"'" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' 2>/dev/null || true)
+  if [[ -z "$name" ]]; then
+    SKIPPED+=("{\"path\":$(json_str "$skill_file"),\"reason\":\"missing name field\"}")
+    return
+  fi
+
+  # Extract description: (handles block scalar |)
+  local desc
+  desc=$(printf '%s' "$fm" | awk '
+    /^description:/ {
+      sub(/^description:[[:space:]]*/,"")
+      if (!/^[|>]/ && length > 0) { print; exit }
+      found=1; next
+    }
+    found && /^  / { sub(/^  /,""); printf "%s ", $0; next }
+    found { exit }
+  ' | sed 's/[[:space:]]*$//' || true)
+  if [[ -z "$desc" ]]; then
+    SKIPPED+=("{\"path\":$(json_str "$skill_file"),\"reason\":\"missing description field\"}")
+    return
+  fi
+
+  # Extract allowed-tools:
+  local tools
+  tools=$(printf '%s' "$fm" | awk '/^allowed-tools:/{found=1;next} found && /^  - /{sub(/^  - /,""); print; next} found && !/^  /{exit}' | tr '\n' ',' | sed 's/,$//' || true)
+
+  # Extract disable-model-invocation:
+  local dim
+  dim=$(printf '%s' "$fm" | grep -E '^disable-model-invocation:[[:space:]]*true' | head -1 || true)
+  local dim_true="false"
+  [[ -n "$dim" ]] && dim_true="true"
+
+  # Extract write-path signals from skill body (lines after frontmatter, first 300 lines)
+  local body
+  body=$(awk 'BEGIN{f=0} /^---$/{f++; if(f==2){found=1;next}} found{print}' "$real_path" 2>/dev/null | head -300 || true)
+
+  # Patterns that suggest a specific state path is written
+  local write_paths
+  write_paths=$(printf '%s' "$body" | grep -oE '~/\.[a-zA-Z0-9_/-]{2,40}|/[a-zA-Z0-9_]{2,}/\.[a-zA-Z0-9_/-]{2,40}' 2>/dev/null | \
+    grep -v '\.bak$' | \
+    sort -u | tr '\n' '|' | sed 's/|$//' || true)
+
+  # Also flag settings.json explicitly
+  if printf '%s' "$body" | grep -q 'settings\.json' 2>/dev/null; then
+    if [[ -n "$write_paths" ]]; then
+      write_paths="${write_paths}|~/.claude/settings.json"
+    else
+      write_paths="~/.claude/settings.json"
+    fi
+  fi
+
+  SK_NAME+=("$name")
+  SK_PATH+=("$skill_file")
+  SK_SCOPE+=("$scope_label")
+  SK_TOOLS+=("$tools")
+  SK_WRITE_PATHS+=("$write_paths")
+  SK_DIM_TRUE+=("$dim_true")
+}
+
+# Traverse each scan entry
+for entry in "${SCAN_ENTRIES[@]}"; do
+  dir="${entry%%:*}"
+  scope_label="${entry##*:}"
+  while IFS= read -r -d '' skill_file; do
+    parse_skill "$skill_file" "$scope_label"
+  done < <(find "$dir" -maxdepth 3 -name "SKILL.md" -print0 2>/dev/null || true)
+done
+
+N=${#SK_NAME[@]}
+
+# ── Class 1: Name Shadow ──────────────────────────────────────────────────────
+
+CONFLICTS=()
+HAS_CRITICAL=0
+
+for i in $([ "$N" -gt 0 ] && seq 0 $((N-1)) || true); do
+  name="${SK_NAME[$i]}"
+  existing_idx=$(name_seen_get "$name")
+
+  if [[ -n "$existing_idx" ]]; then
+    j="$existing_idx"
+    pri_i=$(scope_priority "${SK_SCOPE[$i]}")
+    pri_j=$(scope_priority "${SK_SCOPE[$j]}")
+
+    if (( pri_i >= pri_j )); then
+      winner_name="$name (${SK_SCOPE[$i]})"
+      loser_name="$name (${SK_SCOPE[$j]})"
+      winner_path="${SK_PATH[$i]}"
+      loser_path="${SK_PATH[$j]}"
+    else
+      winner_name="$name (${SK_SCOPE[$j]})"
+      loser_name="$name (${SK_SCOPE[$i]})"
+      winner_path="${SK_PATH[$j]}"
+      loser_path="${SK_PATH[$i]}"
+    fi
+
+    reason="Name shadow: '$loser_name' is hidden by '$winner_name' (scope precedence: enterprise>personal>project>plugin). Recommendation: remove or rename the hidden skill."
+    CONFLICTS+=("{\"class\":1,\"severity\":\"CRITICAL\",\"skill_a\":$(json_str "$winner_name"),\"skill_b\":$(json_str "$loser_name"),\"path_a\":$(json_str "$winner_path"),\"path_b\":$(json_str "$loser_path"),\"reason\":$(json_str "$reason")}")
+    HAS_CRITICAL=1
+  else
+    name_seen_set "$name" "$i"
+  fi
+done
+
+# ── Class 5: State File Collision ─────────────────────────────────────────────
+
+for i in $([ "$N" -gt 0 ] && seq 0 $((N-1)) || true); do
+  paths_i="${SK_WRITE_PATHS[$i]}"
+  [[ -z "$paths_i" ]] && continue
+
+  for j in $(seq $((i+1)) $((N-1))); do
+    paths_j="${SK_WRITE_PATHS[$j]}"
+    [[ -z "$paths_j" ]] && continue
+
+    # Find any common path
+    common=""
+    while IFS= read -r p; do
+      [[ -z "$p" ]] && continue
+      if printf '%s' "|$paths_j|" | grep -qF "|$p|" 2>/dev/null; then
+        common="$p"
+        break
+      fi
+    done <<< "$(printf '%s' "$paths_i" | tr '|' '\n')"
+
+    if [[ -n "$common" ]]; then
+      reason="State collision: both skills read/write '$common' — may produce conflicting state. Recommendation: keep the one that primarily owns this file."
+      CONFLICTS+=("{\"class\":5,\"severity\":\"MEDIUM\",\"skill_a\":$(json_str "${SK_NAME[$i]}"),\"skill_b\":$(json_str "${SK_NAME[$j]}"),\"path_a\":$(json_str "${SK_PATH[$i]}"),\"path_b\":$(json_str "${SK_PATH[$j]}"),\"reason\":$(json_str "$reason")}")
+    fi
+  done
+done
+
+# ── Class 6: Tool Permission Conflict ─────────────────────────────────────────
+
+# Flag pairs where both have disable-model-invocation: true (redundant/conflict)
+DIM_COUNT=0
+DIM_INDICES=()
+for i in $([ "$N" -gt 0 ] && seq 0 $((N-1)) || true); do
+  if [[ "${SK_DIM_TRUE[$i]}" == "true" ]]; then
+    DIM_INDICES+=("$i")
+    DIM_COUNT=$((DIM_COUNT + 1))
+  fi
+done
+
+if (( DIM_COUNT > 1 )); then
+  DIM_LEN=${#DIM_INDICES[@]}
+  for a in $(seq 0 $((DIM_LEN-1))); do
+    for b in $(seq $((a+1)) $((DIM_LEN-1))); do
+      i="${DIM_INDICES[$a]}"
+      j="${DIM_INDICES[$b]}"
+      reason="Tool conflict: both skills declare 'disable-model-invocation: true' — redundant restrictions may indicate overlap. Recommendation: keep only one no-model skill."
+      CONFLICTS+=("{\"class\":6,\"severity\":\"LOW\",\"skill_a\":$(json_str "${SK_NAME[$i]}"),\"skill_b\":$(json_str "${SK_NAME[$j]}"),\"path_a\":$(json_str "${SK_PATH[$i]}"),\"path_b\":$(json_str "${SK_PATH[$j]}"),\"reason\":$(json_str "$reason")}")
+    done
+  done
+fi
+
+# ── Build JSON arrays ──────────────────────────────────────────────────────────
+
+# skills array
+skills_json="["
+for i in $([ "$N" -gt 0 ] && seq 0 $((N-1)) || true); do
+  [[ $i -gt 0 ]] && skills_json+=","
+  skills_json+="{\"name\":$(json_str "${SK_NAME[$i]}"),\"path\":$(json_str "${SK_PATH[$i]}"),\"scope\":$(json_str "${SK_SCOPE[$i]}"),\"tools\":$(json_arr_str "${SK_TOOLS[$i]}")}"
+done
+skills_json+="]"
+
+# conflicts array
+conflicts_json="["
+first=1
+for c in ${CONFLICTS[@]+"${CONFLICTS[@]}"}; do
+  [[ $first -eq 0 ]] && conflicts_json+=","
+  conflicts_json+="$c"
+  first=0
+done
+conflicts_json+="]"
+
+# warnings array (skipped files + notes)
+warnings_json="["
+first=1
+for s in ${SKIPPED[@]+"${SKIPPED[@]}"}; do
+  [[ $first -eq 0 ]] && warnings_json+=","
+  warnings_json+="$s"
+  first=0
+done
+warnings_json+="]"
+
+# ── Output ─────────────────────────────────────────────────────────────────────
+
+if command -v jq &>/dev/null; then
+  jq -n \
+    --argjson skills "$skills_json" \
+    --argjson conflicts "$conflicts_json" \
+    --argjson warnings "$warnings_json" \
+    '{schema_version:1, skills:$skills, conflicts:$conflicts, warnings:$warnings}'
+else
+  printf '{"schema_version":1,"skills":%s,"conflicts":%s,"warnings":%s}\n' \
+    "$skills_json" "$conflicts_json" "$warnings_json"
+fi
+
+# Exit 1 if any CRITICAL conflicts found
+exit $HAS_CRITICAL
