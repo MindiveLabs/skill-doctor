@@ -2,22 +2,9 @@
 
 A [Claude Code](https://claude.ai/claude-code) skill that detects and resolves conflicts between installed skills.
 
-When you have multiple skills installed, some may shadow each other, collide on triggers, or race to make proactive suggestions. skill-doctor scans your skill inventory, tells you exactly what's wrong, and helps you fix it — safely.
+When you have multiple skills installed, some may shadow each other, collide on triggers, or race to make proactive suggestions. skill-doctor scans your skill inventory, tells you what could possibly go wrong, and helps you fix it — safely.
 
-**Read-only by default.** skill-doctor never modifies skill files. The only action it takes (with your explicit confirmation) is moving a conflicting skill to trash — always recoverable.
-
----
-
-## Why You Need This
-
-Claude Code skills are powerful — but they're designed independently, and nobody checks how they interact. The more skills you install, the more likely you are to hit silent failures:
-
-- You invoke a skill by name and the wrong one runs
-- Two skills both try to help with the same request and Claude picks a wrong one
-- A proactive skill fires at the same moment as another, producing confusing output
-- You install a new skill doing similar things with an old one
-
-These bugs are hard to spot because nothing breaks loudly — Claude just behaves unexpectedly. skill-doctor makes these conflicts visible before they cost you time.
+**Read-only by default.** skill-doctor never modifies skill files directly. The only action it takes (with your explicit confirmation) is moving a conflicting skill to trash — always recoverable.
 
 ---
 
@@ -31,7 +18,7 @@ Hook registration (background scanning on skill changes) happens automatically o
 
 ---
 
-## Usage
+## Usage (in your Claude Code)
 
 ```
 /skill-doctor           — scan and report conflicts
