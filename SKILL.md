@@ -1,6 +1,6 @@
 ---
 name: skill-doctor
-version: 0.3.0
+version: 0.3.1
 description: |
   Detects and resolves conflicts between installed Claude Code skills. Scans for
   7 conflict classes: name shadows, trigger collisions, semantic overlap, proactive
