@@ -110,12 +110,13 @@ Skill inventory:
 Run the static scanner:
 
 ```bash
-~/.claude/skills/skill-doctor/bin/skill-doctor-scan --scope all > /tmp/sd-static.json 2>/tmp/sd-static.err
+mkdir -p ~/.skill-doctor
+~/.claude/skills/skill-doctor/bin/skill-doctor-scan --scope all > ~/.skill-doctor/sd-static.json 2>~/.skill-doctor/sd-static.err
 SCAN_EXIT=$?
-cat /tmp/sd-static.err >&2 || true
+cat ~/.skill-doctor/sd-static.err >&2 || true
 ```
 
-Read `/tmp/sd-static.json`. It contains conflicts for Name Shadow, State File Collision,
+Read `~/.skill-doctor/sd-static.json`. It contains conflicts for Name Shadow, State File Collision,
 and Tool Permission Conflict.
 
 If scan fails or produces invalid JSON, warn: "Static scan failed — skipping
@@ -247,7 +248,7 @@ with Phase 4 using only static results.
 
 ## Phase 4: Report
 
-Merge static conflicts (from `/tmp/sd-static.json`) and semantic conflicts
+Merge static conflicts (from `~/.skill-doctor/sd-static.json`) and semantic conflicts
 (from Phase 3). Remove any conflicts listed in `~/.skill-doctor/known-conflicts.json`
 (user-acknowledged suppressions). GC stale entries from known-conflicts.json
 (skills that no longer exist).
@@ -295,7 +296,7 @@ mkdir -p "${HOME}/.skill-doctor/reports"
 ```
 
 Write a markdown report to `$REPORT_FILE` containing:
-- Timestamp and skill-doctor version
+- Timestamp (date and time) and skill-doctor version
 - Skill inventory (names, paths, scopes)
 - Full conflict list with reasons and recommendations
 - Any warnings (skipped/malformed skills)
