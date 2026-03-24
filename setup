@@ -22,4 +22,3 @@ chmod +x "$INSTALL_DIR/bin/"*
 echo "skill-doctor installed at $INSTALL_DIR"
 echo ""
 echo "Run /skill-doctor in a Claude Code session to scan for conflicts."
-echo "On first run, skill-doctor will register hooks automatically."
