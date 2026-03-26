@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES_DIR="$SCRIPT_DIR/fixtures"
-SCANNER="$SCRIPT_DIR/../bin/skill-doctor-scan"
+SCANNER="$SCRIPT_DIR/../skills/skill-doctor/bin/skill-doctor-scan"
 
 PASS=0
 FAIL=0
@@ -443,7 +443,7 @@ print('ok')
 echo ""
 echo "=== Preamble: Upgrade Auto-Proceed ==="
 
-SKILL_MD="$SCRIPT_DIR/../SKILL.md"
+SKILL_MD="$SCRIPT_DIR/../skills/skill-doctor/SKILL.md"
 
 # SKILL.md must instruct Claude to proceed to Phase 1 after upgrade (not stop)
 (
@@ -469,7 +469,7 @@ SKILL_MD="$SCRIPT_DIR/../SKILL.md"
 
 # upgrade script must exist and be executable
 (
-  UPGRADE_BIN="$SCRIPT_DIR/../bin/skill-doctor-upgrade"
+  UPGRADE_BIN="$SCRIPT_DIR/../skills/skill-doctor/bin/skill-doctor-upgrade"
   if [[ -x "$UPGRADE_BIN" ]]; then
     echo "PASS: preamble: skill-doctor-upgrade is executable"
     PASS=$((PASS + 1))

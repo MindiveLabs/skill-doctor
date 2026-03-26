@@ -10,11 +10,22 @@ When you have multiple skills installed, some may shadow each other, collide on 
 
 ## Installation
 
+### Plugin (recommended)
+
+```
+/plugin marketplace add MindiveLabs/skill-doctor
+/plugin install skill-doctor@skill-doctor
+```
+
+Hooks are registered automatically. Upgrade anytime with `/plugin update skill-doctor@skill-doctor`.
+
+### Standalone (git clone)
+
 ```bash
 git clone git@github.com:MindiveLabs/skill-doctor.git ~/.claude/skills/skill-doctor && ~/.claude/skills/skill-doctor/setup
 ```
 
-Hook registration (background scanning on skill changes) happens automatically on the first `/skill-doctor` run.
+Hook registration (background scanning on skill changes) happens automatically on the first `/skill-doctor` run. Upgrade with `/skill-doctor upgrade yourself`.
 
 ---
 
@@ -102,11 +113,11 @@ cd test
 
 ## Upgrading
 
-skill-doctor checks for updates on every run and upgrades itself automatically when a new version is available. To trigger a manual upgrade at any time:
+skill-doctor checks for updates on every run and notifies you when a new version is available.
 
-```
-/skill-doctor upgrade yourself
-```
+**Plugin install:** run `/plugin update skill-doctor@skill-doctor` in any Claude Code session.
+
+**Standalone install:** run `/skill-doctor upgrade yourself` to upgrade in place.
 
 ---
 

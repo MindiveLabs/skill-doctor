@@ -1,0 +1,24 @@
+{
+  "name": "skill-doctor",
+  "owner": {
+    "name": "MindiveLabs"
+  },
+  "metadata": {
+    "description": "Claude Code skill conflict detection and resolution"
+  },
+  "plugins": [
+    {
+      "name": "skill-doctor",
+      "source": "./",
+      "description": "Detects and resolves conflicts between installed Claude Code skills. Scans for name shadows, trigger collisions, semantic overlap, proactive races, state file collisions, tool permission conflicts, and subsumption.",
+      "version": "0.3.1",
+      "author": {
+        "name": "MindiveLabs"
+      },
+      "homepage": "https://github.com/MindiveLabs/skill-doctor",
+      "repository": "https://github.com/MindiveLabs/skill-doctor",
+      "license": "MIT",
+      "keywords": ["skills", "conflicts", "developer-tools"]
+    }
+  ]
+}

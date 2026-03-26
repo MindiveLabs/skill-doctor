@@ -30,25 +30,41 @@ explicitly asks. All analysis is non-destructive. Removals move to trash (recove
 Run this first:
 
 ```bash
-_UPD=$(~/.claude/skills/skill-doctor/bin/skill-doctor-update-check 2>/dev/null || true)
+_SD_BIN="${CLAUDE_SKILL_DIR}/bin"
+_UPD=$(SKILL_DOCTOR_INSTALL_DIR="${CLAUDE_SKILL_DIR}" "$_SD_BIN/skill-doctor-update-check" 2>/dev/null || true)
 [ -n "$_UPD" ] && echo "$_UPD" || true
 mkdir -p ~/.skill-doctor/trash ~/.skill-doctor/reports
-_SD_VERSION=$(cat ~/.claude/skills/skill-doctor/VERSION 2>/dev/null || echo "0.1.0")
+_SD_VERSION=$(cat "${CLAUDE_SKILL_DIR}/VERSION" 2>/dev/null || echo "0.1.0")
 echo "skill-doctor v$_SD_VERSION"
+# Detect install method: standalone uses ~/.claude/skills/, plugin uses ~/.claude/plugins/
+if [[ "${CLAUDE_SKILL_DIR}" == *"/.claude/skills/"* ]]; then
+  _SD_INSTALL="standalone"
+else
+  _SD_INSTALL="plugin"
+fi
 ```
 
-If output contains `UPGRADE_AVAILABLE <old> <new>`: tell the user "skill-doctor
-v{new} is available (current: v{old}). Run `/skill-doctor upgrade yourself` to upgrade."
+If output contains `UPGRADE_AVAILABLE <old> <new>`:
+- If `$_SD_INSTALL` is `"standalone"`: tell the user "skill-doctor v{new} is available
+  (current: v{old}). Run `/skill-doctor upgrade yourself` to upgrade."
+- If `$_SD_INSTALL` is `"plugin"`: tell the user "skill-doctor v{new} is available
+  (current: v{old}). Run `/plugin update skill-doctor@skill-doctor` to upgrade."
 
-**If arguments contain "upgrade" or "upgrade yourself":** run the upgrade script:
+**If arguments contain "upgrade" or "upgrade yourself":**
 
-```bash
-~/.claude/skills/skill-doctor/bin/skill-doctor-upgrade
-```
+- If `$_SD_INSTALL` is `"standalone"`: run the upgrade script:
 
-Show the output. If it succeeds, tell the user the upgrade is complete, then
-**automatically proceed to Phase 1** to run the scan with the upgraded version.
-If it fails, show the error and stop.
+  ```bash
+  "${CLAUDE_SKILL_DIR}/bin/skill-doctor-upgrade"
+  ```
+
+  Show the output. If it succeeds, tell the user the upgrade is complete, then
+  **automatically proceed to Phase 1** to run the scan with the upgraded version.
+  If it fails, show the error and stop.
+
+- If `$_SD_INSTALL` is `"plugin"`: do NOT run the upgrade script. Instead, tell the user:
+  "To upgrade skill-doctor, run `/plugin update skill-doctor@skill-doctor` in a Claude Code
+  session, then invoke `/skill-doctor` again to scan with the updated version."
 
 ---
 
@@ -111,7 +127,7 @@ Run the static scanner:
 
 ```bash
 mkdir -p ~/.skill-doctor
-~/.claude/skills/skill-doctor/bin/skill-doctor-scan --scope all > ~/.skill-doctor/sd-static.json 2>~/.skill-doctor/sd-static.err
+"${CLAUDE_SKILL_DIR}/bin/skill-doctor-scan" --scope all > ~/.skill-doctor/sd-static.json 2>~/.skill-doctor/sd-static.err
 SCAN_EXIT=$?
 cat ~/.skill-doctor/sd-static.err >&2 || true
 ```
@@ -380,9 +396,12 @@ Save a new report and show the path.
 
 ## Phase 6: Hook Registration
 
-(Runs on first-ever invocation. Idempotent — safe to re-run.)
+(Runs on first-ever invocation for **standalone installs only**. For plugin installs,
+hooks are registered automatically via the plugin's hook configuration — skip this phase.)
 
-Skip if `--scope local` was passed.
+Skip if:
+- `--scope local` was passed, OR
+- `$_SD_INSTALL` is `"plugin"`
 
 Check for existing hook registration:
 
@@ -420,7 +439,7 @@ Add these two hook entries to the `hooks` array (or create it):
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'echo \"$CLAUDE_TOOL_INPUT\" | grep -q \"SKILL.md\" && ~/.claude/skills/skill-doctor/bin/skill-doctor-hook || true'",
+            "command": "bash -c 'echo \"$CLAUDE_TOOL_INPUT\" | grep -q \"SKILL.md\" && \"${CLAUDE_SKILL_DIR}/bin/skill-doctor-hook\" || true'",
             "description": "skill-doctor: detect skill conflicts after SKILL.md edits"
           }
         ]
@@ -431,7 +450,7 @@ Add these two hook entries to the `hooks` array (or create it):
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/skills/skill-doctor/bin/skill-doctor-hook --session-start",
+            "command": "\"${CLAUDE_SKILL_DIR}/bin/skill-doctor-hook\" --session-start",
             "description": "skill-doctor: check for skill conflicts at session start"
           }
         ]

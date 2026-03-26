@@ -4,7 +4,7 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES_DIR="$SCRIPT_DIR/fixtures"
-HOOK="$SCRIPT_DIR/../bin/skill-doctor-hook"
+HOOK="$SCRIPT_DIR/../skills/skill-doctor/bin/skill-doctor-hook"
 
 PASS=0
 FAIL=0
