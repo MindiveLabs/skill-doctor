@@ -5,7 +5,7 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETUP="$REPO_ROOT/setup"
-UPDATE_CHECK="$REPO_ROOT/bin/skill-doctor-update-check"
+UPDATE_CHECK="$REPO_ROOT/skills/skill-doctor/bin/skill-doctor-update-check"
 
 PASS=0
 FAIL=0
@@ -69,7 +69,7 @@ for b in bin/skill-doctor-scan bin/skill-doctor-hook bin/skill-doctor-update-che
 done
 
 # Verify installed VERSION matches source VERSION
-SOURCE_VERSION=$(cat "$REPO_ROOT/VERSION" 2>/dev/null | tr -d '[:space:]')
+SOURCE_VERSION=$(cat "$REPO_ROOT/skills/skill-doctor/VERSION" 2>/dev/null | tr -d '[:space:]')
 INSTALLED_VERSION=$(cat "$INSTALL_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')
 if [[ "$SOURCE_VERSION" == "$INSTALLED_VERSION" ]]; then
   pass "install: installed VERSION matches source ($SOURCE_VERSION)"
@@ -78,7 +78,7 @@ else
 fi
 
 # Verify installed SKILL.md matches source SKILL.md
-if diff -q "$REPO_ROOT/SKILL.md" "$INSTALL_DIR/SKILL.md" >/dev/null 2>&1; then
+if diff -q "$REPO_ROOT/skills/skill-doctor/SKILL.md" "$INSTALL_DIR/SKILL.md" >/dev/null 2>&1; then
   pass "install: installed SKILL.md matches source"
 else
   fail "install: installed SKILL.md matches source" "files differ"
@@ -113,7 +113,7 @@ else
 fi
 
 # Verify SKILL.md was overwritten (old marker should be gone)
-if diff -q "$REPO_ROOT/SKILL.md" "$INSTALL_DIR/SKILL.md" >/dev/null 2>&1; then
+if diff -q "$REPO_ROOT/skills/skill-doctor/SKILL.md" "$INSTALL_DIR/SKILL.md" >/dev/null 2>&1; then
   pass "upgrade: SKILL.md overwritten with current source"
 else
   fail "upgrade: SKILL.md overwritten with current source" "files differ after upgrade"

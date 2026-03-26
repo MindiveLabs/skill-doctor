@@ -34,9 +34,9 @@ echo "Backed up current install to $BACKUP"
 
 # Install new files (preserve ~/.skill-doctor/ state, only update skill files)
 mkdir -p "$INSTALL_DIR/bin"
-cp "$SRC/SKILL.md"  "$INSTALL_DIR/SKILL.md"
-cp "$SRC/VERSION"   "$INSTALL_DIR/VERSION"
-cp "$SRC/bin/"*     "$INSTALL_DIR/bin/"
+cp "$SRC/skills/skill-doctor/SKILL.md"  "$INSTALL_DIR/SKILL.md"
+cp "$SRC/skills/skill-doctor/VERSION"   "$INSTALL_DIR/VERSION"
+cp "$SRC/skills/skill-doctor/bin/"*     "$INSTALL_DIR/bin/"
 cp "$SRC/setup"     "$INSTALL_DIR/setup" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/bin/"*
 [[ -f "$INSTALL_DIR/setup" ]] && chmod +x "$INSTALL_DIR/setup"

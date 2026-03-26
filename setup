@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # SKILL_DOCTOR_INSTALL_DIR can override the install path (used for testing)
 INSTALL_DIR="${SKILL_DOCTOR_INSTALL_DIR:-${HOME}/.claude/skills/skill-doctor}"
+SRC="$SCRIPT_DIR/skills/skill-doctor"
 
 echo "Installing skill-doctor..."
 
@@ -12,9 +13,9 @@ echo "Installing skill-doctor..."
 mkdir -p "$INSTALL_DIR/bin"
 
 # Copy files
-cp "$SCRIPT_DIR/SKILL.md"  "$INSTALL_DIR/SKILL.md"
-cp "$SCRIPT_DIR/VERSION"   "$INSTALL_DIR/VERSION"
-cp "$SCRIPT_DIR/bin/"*     "$INSTALL_DIR/bin/"
+cp "$SRC/SKILL.md"  "$INSTALL_DIR/SKILL.md"
+cp "$SRC/VERSION"   "$INSTALL_DIR/VERSION"
+cp "$SRC/bin/"*     "$INSTALL_DIR/bin/"
 
 # Make binaries executable
 chmod +x "$INSTALL_DIR/bin/"*

@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'echo \"$CLAUDE_TOOL_INPUT\" | grep -q \"SKILL.md\" && \"${CLAUDE_PLUGIN_ROOT}/skills/skill-doctor/bin/skill-doctor-hook\" || true'",
+            "description": "skill-doctor: detect skill conflicts after SKILL.md edits"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/skills/skill-doctor/bin/skill-doctor-hook\" --session-start",
+            "description": "skill-doctor: check for skill conflicts at session start"
+          }
+        ]
+      }
+    ]
+  }
+}
